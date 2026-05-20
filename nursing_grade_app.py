@@ -236,11 +236,11 @@ for i, nurse in enumerate(st.session_state.daytime_nurses):
     days_worked = calc_nurse_days(hire, status, q_start, q_end)
     weight = days_worked / q_days if status != "퇴사" else 0.0
     cols[3].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{days_worked}일</div>', unsafe_allow_html=True)
-    cols[4].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{weight:.4f}명</div>', unsafe_allow_html=True)
+    cols[4].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
     daytime_total_weight += weight
     st.session_state.daytime_nurses[i] = {"hire_date": hire, "status": status}
 
-st.markdown(f'<div class="result-card">📊 <b>주간 간호사 3개월 평균 (환산합계)</b>: <span class="kpi-value">{daytime_total_weight:.4f}명</span></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="result-card">📊 <b>주간 간호사 3개월 평균 (환산합계)</b>: <span class="kpi-value">{daytime_total_weight:.2f}명</span></div>', unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────
 # ④ 야간전담 간호사 입력
@@ -260,7 +260,7 @@ n_header = st.columns([0.4, 2, 2, 2, 2, 2])
 n_header[0].markdown("**#**")
 n_header[1].markdown("**입사일**")
 n_header[2].markdown("**상태**")
-n_header[3].markdown("**주간시간**")
+n_header[3].markdown("**근무시간**")
 n_header[4].markdown("**산정일수** 🟡")
 n_header[5].markdown("**환산인원** 🟡")
 
@@ -274,24 +274,30 @@ for i, nurse in enumerate(st.session_state.night_nurses):
     status_idx = status_options.index(nurse["status"]) if nurse["status"] in status_options else 0
     status = cols[2].selectbox("상태", status_options, index=status_idx,
                                key=f"n_status_{i}", label_visibility="collapsed")
-    weekly_h = cols[3].number_input("주간시간", min_value=0, max_value=60,
+    weekly_h = cols[3].number_input("근무시간", min_value=0, max_value=60,
                                      value=int(nurse.get("weekly_hours", 40)), step=1,
                                      key=f"n_hours_{i}", label_visibility="collapsed",
                                      disabled=(status not in ["단시간근무"]))
     days_worked = calc_nurse_days(hire, status, q_start, q_end)
     if status == "퇴사":
         weight = 0.0
+        pt_weight = 0.0
+        effective_days_display = "0일"
     elif status == "단시간근무":
         pt_weight = calc_parttime_weight(weekly_h)
         weight = (days_worked / q_days) * pt_weight
+        effective_days = days_worked * pt_weight
+        effective_days_display = f"{days_worked}일 × {pt_weight} = {effective_days:.2f}일"
     else:
+        pt_weight = 1.0
         weight = days_worked / q_days
-    cols[4].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600">{days_worked}일</div>', unsafe_allow_html=True)
-    cols[5].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600">{weight:.4f}명</div>', unsafe_allow_html=True)
+        effective_days_display = f"{days_worked}일"
+    cols[4].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600;font-size:13px">{effective_days_display}</div>', unsafe_allow_html=True)
+    cols[5].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
     night_total_weight += weight
     st.session_state.night_nurses[i] = {"hire_date": hire, "status": status, "weekly_hours": weekly_h}
 
-st.markdown(f'<div class="result-card">📊 <b>야간전담 간호사 3개월 평균 (환산합계)</b>: <span class="kpi-value" style="color:#6a1b9a">{night_total_weight:.4f}명</span></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="result-card">📊 <b>야간전담 간호사 3개월 평균 (환산합계)</b>: <span class="kpi-value" style="color:#6a1b9a">{night_total_weight:.2f}명</span></div>', unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────
 # ⑤ 최종 계산 및 보고서
@@ -314,10 +320,10 @@ def kpi(col, label, value, unit=""):
 
 kpi(k1, "🏥 운영 병상 수",        f"{beds}",                    "병상")
 kpi(k2, "👥 일평균 재원환자 수",   f"{avg_patients:.2f}",        "명/일")
-kpi(k3, "👩‍⚕️ 3개월 평균 간호사 수", f"{total_nurses:.4f}",        "명")
-kpi(k4, "🌙 야간전담 간호사 수",   f"{night_total_weight:.4f}",  "명")
+kpi(k3, "👩‍⚕️ 3개월 평균 간호사 수", f"{total_nurses:.2f}",         "명")
+kpi(k4, "🌙 야간전담 간호사 수",   f"{night_total_weight:.2f}",  "명")
 kpi(k5, "📊 야간전담 간호사 비율", f"{night_ratio:.2f}",         "%")
-kpi(k6, "📐 환자대비 간호사수",    f"{patient_ratio:.4f}",       "(환자/간호사)")
+kpi(k6, "📐 환자대비 간호사수",    f"{patient_ratio:.2f}",       "(환자/간호사)")
 
 # 등급 표시
 st.markdown("---")
@@ -328,7 +334,7 @@ st.markdown(f"""
     <div style="font-size:18px; color:#555; margin-bottom:8px;">산정 등급</div>
     <span class="grade-box {gcls}">{grade_display}</span>
     <div style="font-size:14px; color:#777; margin-top:10px;">
-        환자대비 간호사수: <b>{patient_ratio:.4f} ({patient_ratio:.2f}%)</b>
+        환자대비 간호사수: <b>{patient_ratio:.2f} ({patient_ratio:.2f}%)</b>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -354,12 +360,12 @@ with st.expander("🔍 상세 계산 내역 보기"):
 |------|--------|------|
 | 분기 일수 | {q_start} ~ {q_end} | **{q_days}일** |
 | 총 재원환자수 | {total_patients}명 (3개월 합계) | |
-| 일평균 재원환자수 | {total_patients} ÷ {q_days}일 | **{avg_patients:.4f}명** |
-| 주간 간호사 환산 | 각 간호사 근무일수 ÷ {q_days}일 합계 | **{daytime_total_weight:.4f}명** |
-| 야간전담 간호사 환산 | 근무일수 ÷ {q_days}일 × 가중치 합계 | **{night_total_weight:.4f}명** |
-| 3개월 평균 전체 간호사 수 | 주간 + 야간 | **{total_nurses:.4f}명** |
-| 야간전담 간호사 비율 | {night_total_weight:.4f} ÷ {total_nurses:.4f} × 100 | **{night_ratio:.2f}%** |
-| 환자대비 간호사수 | {avg_patients:.4f} ÷ {total_nurses:.4f} | **{patient_ratio:.4f} ({patient_ratio:.2f}%)** |
+| 일평균 재원환자수 | {total_patients} ÷ {q_days}일 | **{avg_patients:.2f}명** |
+| 일반병동 간호사수 [주간간호사 + 야간전담간호사] | 각 간호사 근무일수 ÷ {q_days}일 합계 | **{daytime_total_weight:.2f}명** |
+| 야간전담 간호사 환산 | 근무일수 ÷ {q_days}일 × 가중치 합계 | **{night_total_weight:.2f}명** |
+| 3개월 평균 전체 간호사 수 | 일반병동 간호사 + 야간전담 | **{total_nurses:.2f}명** |
+| 야간전담 간호사 비율 | {night_total_weight:.2f} ÷ {total_nurses:.2f} × 100 | **{night_ratio:.2f}%** |
+| 환자대비 간호사수 | {avg_patients:.2f} ÷ {total_nurses:.2f} | **{patient_ratio:.2f} ({patient_ratio:.2f}%)** |
 | **산정 등급** | | **{grade}** |
 """)
 
