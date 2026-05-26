@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import calendar
+import hashlib
 import io
 
 # ──────────────────────────────────────────────
@@ -146,7 +147,10 @@ def parse_excel_upload(file_bytes):
         if isinstance(v, date_type): return v
         s = str(v).strip()
         if not s: return None
-        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"]:
+        for fmt in [
+            "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d",
+            "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+        ]:
             try:
                 from datetime import datetime as dt
                 return dt.strptime(s, fmt).date()
@@ -252,6 +256,45 @@ st.markdown(
 # ──────────────────────────────────────────────
 QUARTER_KEYS = list(QUARTER_RANGES.keys())
 
+def apply_uploaded_data(parsed):
+    st.session_state["year"] = parsed["year"]
+    st.session_state["beds"] = parsed["beds"]
+    for i, patient_count in enumerate(parsed["patients"]):
+        st.session_state[f"pat_{i}"] = patient_count
+
+    q = parsed["quarter"]
+    quarter = q if q in QUARTER_KEYS else QUARTER_KEYS[1]
+    st.session_state["quarter_idx"] = QUARTER_KEYS.index(quarter)
+    st.session_state["quarter_sel"] = quarter
+
+    widget_prefixes = (
+        "d_hire_", "d_resign_", "d_status_",
+        "n_hire_", "n_resign_", "n_status_", "n_hours_",
+    )
+    for key in list(st.session_state):
+        if key.startswith(widget_prefixes):
+            del st.session_state[key]
+
+    daytime = parsed["daytime"] or [
+        {"hire_date": None, "resign_date": None, "status": "근무"}
+    ]
+    night = parsed["night"] or [
+        {"hire_date": None, "resign_date": None, "status": "근무", "weekly_hours": 40}
+    ]
+    st.session_state.daytime_nurses = daytime
+    st.session_state.night_nurses = night
+
+    for i, nurse in enumerate(daytime):
+        st.session_state[f"d_hire_{i}"] = nurse["hire_date"]
+        st.session_state[f"d_resign_{i}"] = nurse["resign_date"]
+        st.session_state[f"d_status_{i}"] = nurse["status"]
+
+    for i, nurse in enumerate(night):
+        st.session_state[f"n_hire_{i}"] = nurse["hire_date"]
+        st.session_state[f"n_resign_{i}"] = nurse["resign_date"]
+        st.session_state[f"n_status_{i}"] = nurse["status"]
+        st.session_state[f"n_hours_{i}"] = nurse["weekly_hours"]
+
 with st.expander("📂 엑셀 파일로 데이터 자동 입력 (클릭하여 열기)", expanded=False):
     st.markdown(
         "<div style='background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;"
@@ -275,27 +318,23 @@ with st.expander("📂 엑셀 파일로 데이터 자동 입력 (클릭하여 �
     st.markdown("---")
     uploaded = st.file_uploader("작성한 엑셀 파일 업로드", type=["xlsx"], key="excel_upload")
     if uploaded is not None:
-        parsed, err = parse_excel_upload(uploaded.read())
-        if err:
-            st.error("파싱 오류: " + err)
-        elif parsed:
-            # ★ 위젯 key에 직접 값 주입 (rerun 전에 수행)
-            st.session_state["year"]        = parsed["year"]
-            st.session_state["beds"]        = parsed["beds"]
-            st.session_state["pat_0"]       = parsed["patients"][0]
-            st.session_state["pat_1"]       = parsed["patients"][1]
-            st.session_state["pat_2"]       = parsed["patients"][2]
-            q = parsed["quarter"]
-            st.session_state["quarter_idx"] = QUARTER_KEYS.index(q) if q in QUARTER_KEYS else 1
-            if parsed["daytime"]:
-                st.session_state.daytime_nurses = parsed["daytime"]
-            if parsed["night"]:
-                st.session_state.night_nurses   = parsed["night"]
-            st.success(
-                "데이터 로드 완료! 주간 간호사 " + str(len(parsed["daytime"])) +
-                "명 / 야간전담 " + str(len(parsed["night"])) + "명 입력됨."
-            )
-            st.rerun()
+        uploaded_bytes = uploaded.getvalue()
+        file_signature = hashlib.sha256(uploaded_bytes).hexdigest()
+        reapply = st.button("업로드한 데이터 다시 적용", key="reapply_excel")
+        if st.session_state.get("_applied_excel_signature") != file_signature or reapply:
+            parsed, err = parse_excel_upload(uploaded_bytes)
+            if err:
+                st.error("파싱 오류: " + err)
+            elif parsed:
+                apply_uploaded_data(parsed)
+                st.session_state["_applied_excel_signature"] = file_signature
+                st.session_state["_excel_upload_message"] = (
+                    "데이터 로드 완료! 주간 간호사 " + str(len(parsed["daytime"])) +
+                    "명 / 야간전담 " + str(len(parsed["night"])) + "명 입력됨."
+                )
+                st.rerun()
+        elif "_excel_upload_message" in st.session_state:
+            st.success(st.session_state.pop("_excel_upload_message"))
 
 # ──────────────────────────────────────────────
 # ① 기본 정보
