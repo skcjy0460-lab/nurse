@@ -192,7 +192,38 @@ import io
 def parse_excel_upload(file_bytes):
     """업로드된 엑셀 파일에서 데이터를 파싱하여 dict로 반환"""
     import openpyxl
-    from datetime import date as date_type
+    from datetime import date as date_type, datetime
+
+    # 날짜 파싱 공용 함수 - datetime/date/문자열 모두 처리 후 반드시 date 객체 반환
+    def parse_date(v):
+        if v is None:
+            return None
+        # Excel이 datetime으로 읽은 경우 → date로 변환
+        if isinstance(v, datetime):
+            return v.date()
+        # 이미 date 객체
+        if isinstance(v, date_type):
+            return v
+        # 문자열 파싱
+        s = str(v).strip()
+        if not s:
+            return None
+        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"]:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
+        return None
+
+    def to_int(v):
+        try:
+            return int(float(str(v))) if v is not None else None
+        except:
+            return None
+
+    def to_str(v):
+        return str(v).strip() if v is not None else None
+
     result = {
         "year": None, "quarter": None, "beds": None,
         "patients": [0, 0, 0],
@@ -204,100 +235,72 @@ def parse_excel_upload(file_bytes):
         # ── 기본정보 시트 ──
         if "기본정보" in wb.sheetnames:
             ws = wb["기본정보"]
-            # 연도: B5, 분기: D5, 병상: F5
-            def to_int(v):
-                try: return int(v)
-                except: return None
-            def to_str(v):
-                return str(v).strip() if v else None
-
             result["year"]    = to_int(ws["B5"].value) or 2026
             result["quarter"] = to_str(ws["D5"].value)
             result["beds"]    = to_int(ws["F5"].value) or 0
-
-            # 재원환자수: B10~D10 (합계 행)
+            # 재원환자수: 10행 B~D열
             for i, col in enumerate(["B", "C", "D"]):
-                v = ws[f"{col}10"].value
-                result["patients"][i] = to_int(v) or 0
+                result["patients"][i] = to_int(ws[f"{col}10"].value) or 0
 
         # ── 주간간호사 시트 ──
         if "주간간호사" in wb.sheetnames:
             ws2 = wb["주간간호사"]
+            empty_streak = 0
             for r in range(4, 54):
                 hire_raw   = ws2.cell(r, 3).value
                 resign_raw = ws2.cell(r, 4).value
                 status_raw = ws2.cell(r, 5).value
 
+                # 입사일이 없으면 해당 행 스킵 (연속 3행 비면 종료)
                 if not hire_raw:
+                    empty_streak += 1
+                    if empty_streak >= 3:
+                        break
                     continue
-
-                # 날짜 파싱
-                def parse_date(v):
-                    if v is None: return None
-                    if isinstance(v, date_type): return v
-                    from datetime import datetime
-                    if isinstance(v, datetime): return v.date()
-                    try:
-                        s = str(v).strip()
-                        if not s: return None
-                        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
-                            try: return datetime.strptime(s, fmt).date()
-                            except: pass
-                    except: pass
-                    return None
+                empty_streak = 0
 
                 hire   = parse_date(hire_raw)
                 resign = parse_date(resign_raw)
-                status = str(status_raw).strip() if status_raw else "근무"
+                status = to_str(status_raw) or "근무"
                 if status not in ["근무", "퇴사"]:
                     status = "근무"
 
-                if hire:
+                if hire is not None:
                     result["daytime"].append({
-                        "hire_date": hire,
+                        "hire_date":   hire,
                         "resign_date": resign if status == "퇴사" else None,
-                        "status": status
+                        "status":      status
                     })
 
-        # ── 야간전담 시트 ──
+        # ── 야간전담간호사 시트 ──
         if "야간전담간호사" in wb.sheetnames:
             ws3 = wb["야간전담간호사"]
+            empty_streak = 0
             for r in range(4, 54):
-                hire_raw    = ws3.cell(r, 3).value
-                resign_raw  = ws3.cell(r, 4).value
-                status_raw  = ws3.cell(r, 5).value
-                hours_raw   = ws3.cell(r, 6).value
+                hire_raw   = ws3.cell(r, 3).value
+                resign_raw = ws3.cell(r, 4).value
+                status_raw = ws3.cell(r, 5).value
+                hours_raw  = ws3.cell(r, 6).value
 
                 if not hire_raw:
+                    empty_streak += 1
+                    if empty_streak >= 3:
+                        break
                     continue
-
-                def parse_date(v):
-                    if v is None: return None
-                    if isinstance(v, date_type): return v
-                    from datetime import datetime
-                    if isinstance(v, datetime): return v.date()
-                    try:
-                        s = str(v).strip()
-                        if not s: return None
-                        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
-                            try: return datetime.strptime(s, fmt).date()
-                            except: pass
-                    except: pass
-                    return None
+                empty_streak = 0
 
                 hire   = parse_date(hire_raw)
                 resign = parse_date(resign_raw)
-                status = str(status_raw).strip() if status_raw else "근무"
+                status = to_str(status_raw) or "근무"
                 if status not in ["근무", "단시간근무", "퇴사"]:
                     status = "근무"
-                try:    hours = int(float(str(hours_raw))) if hours_raw else 40
-                except: hours = 40
+                hours = to_int(hours_raw) or 40
 
-                if hire:
+                if hire is not None:
                     result["night"].append({
-                        "hire_date": hire,
+                        "hire_date":   hire,
                         "resign_date": resign if status == "퇴사" else None,
-                        "status": status,
+                        "status":      status,
                         "weekly_hours": hours
                     })
 
