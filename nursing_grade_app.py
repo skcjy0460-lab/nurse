@@ -183,6 +183,128 @@ def month_label(base, offset):
     y = base.year + ((base.month - 1 + offset) // 12)
     return f"{y}년 {m}월"
 
+
+# ──────────────────────────────────────────────
+# 엑셀 업로드 파싱 함수
+# ──────────────────────────────────────────────
+import io
+
+def parse_excel_upload(file_bytes):
+    """업로드된 엑셀 파일에서 데이터를 파싱하여 dict로 반환"""
+    import openpyxl
+    from datetime import date as date_type
+    result = {
+        "year": None, "quarter": None, "beds": None,
+        "patients": [0, 0, 0],
+        "daytime": [], "night": []
+    }
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+
+        # ── 기본정보 시트 ──
+        if "기본정보" in wb.sheetnames:
+            ws = wb["기본정보"]
+            # 연도: B5, 분기: D5, 병상: F5
+            def to_int(v):
+                try: return int(v)
+                except: return None
+            def to_str(v):
+                return str(v).strip() if v else None
+
+            result["year"]    = to_int(ws["B5"].value) or 2026
+            result["quarter"] = to_str(ws["D5"].value)
+            result["beds"]    = to_int(ws["F5"].value) or 0
+
+            # 재원환자수: B10~D10 (합계 행)
+            for i, col in enumerate(["B", "C", "D"]):
+                v = ws[f"{col}10"].value
+                result["patients"][i] = to_int(v) or 0
+
+        # ── 주간간호사 시트 ──
+        if "주간간호사" in wb.sheetnames:
+            ws2 = wb["주간간호사"]
+            for r in range(4, 54):
+                hire_raw   = ws2.cell(r, 3).value
+                resign_raw = ws2.cell(r, 4).value
+                status_raw = ws2.cell(r, 5).value
+
+                if not hire_raw:
+                    continue
+
+                # 날짜 파싱
+                def parse_date(v):
+                    if v is None: return None
+                    if isinstance(v, date_type): return v
+                    from datetime import datetime
+                    if isinstance(v, datetime): return v.date()
+                    try:
+                        s = str(v).strip()
+                        if not s: return None
+                        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
+                            try: return datetime.strptime(s, fmt).date()
+                            except: pass
+                    except: pass
+                    return None
+
+                hire   = parse_date(hire_raw)
+                resign = parse_date(resign_raw)
+                status = str(status_raw).strip() if status_raw else "근무"
+                if status not in ["근무", "퇴사"]:
+                    status = "근무"
+
+                if hire:
+                    result["daytime"].append({
+                        "hire_date": hire,
+                        "resign_date": resign if status == "퇴사" else None,
+                        "status": status
+                    })
+
+        # ── 야간전담 시트 ──
+        if "야간전담간호사" in wb.sheetnames:
+            ws3 = wb["야간전담간호사"]
+            for r in range(4, 54):
+                hire_raw    = ws3.cell(r, 3).value
+                resign_raw  = ws3.cell(r, 4).value
+                status_raw  = ws3.cell(r, 5).value
+                hours_raw   = ws3.cell(r, 6).value
+
+                if not hire_raw:
+                    continue
+
+                def parse_date(v):
+                    if v is None: return None
+                    if isinstance(v, date_type): return v
+                    from datetime import datetime
+                    if isinstance(v, datetime): return v.date()
+                    try:
+                        s = str(v).strip()
+                        if not s: return None
+                        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
+                            try: return datetime.strptime(s, fmt).date()
+                            except: pass
+                    except: pass
+                    return None
+
+                hire   = parse_date(hire_raw)
+                resign = parse_date(resign_raw)
+                status = str(status_raw).strip() if status_raw else "근무"
+                if status not in ["근무", "단시간근무", "퇴사"]:
+                    status = "근무"
+                try:    hours = int(float(str(hours_raw))) if hours_raw else 40
+                except: hours = 40
+
+                if hire:
+                    result["night"].append({
+                        "hire_date": hire,
+                        "resign_date": resign if status == "퇴사" else None,
+                        "status": status,
+                        "weekly_hours": hours
+                    })
+
+    except Exception as e:
+        return None, str(e)
+    return result, None
+
 # ──────────────────────────────────────────────
 # 세션 상태 초기화  ← 빈 칸으로 시작
 # ──────────────────────────────────────────────
@@ -208,16 +330,76 @@ st.markdown(
 )
 
 # ──────────────────────────────────────────────
+# 엑셀 파일 업로드 UI
+# ──────────────────────────────────────────────
+with st.expander("📂 엑셀 파일로 데이터 자동 입력 (클릭하여 열기)", expanded=False):
+    notice_html = (
+        "<div style='background:#e3f2fd;border:1px solid #90caf9;"
+        "border-radius:8px;padding:12px 16px;font-size:13px;'>"
+        "<b>사용 방법</b><br>"
+        "1. 아래 버튼으로 <b>입력 양식 엑셀 파일</b>을 다운로드하세요.<br>"
+        "2. 양식의 <span style='background:#FFF9C4;padding:1px 4px;"
+        "border-radius:3px;'>노란색 셀</span>에 데이터를 입력 후 저장하세요.<br>"
+        "3. 저장한 파일을 아래 업로드 칸에 올리면 모든 항목이 자동으로 채워집니다."
+        "</div>"
+    )
+    st.markdown(notice_html, unsafe_allow_html=True)
+
+    try:
+        with open("/mnt/user-data/outputs/간호관리료_데이터입력양식.xlsx", "rb") as tf:
+            st.download_button(
+                label="⬇️ 입력 양식 다운로드 (Excel)",
+                data=tf.read(),
+                file_name="간호관리료_데이터입력양식.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    except Exception:
+        st.warning("양식 파일을 찾을 수 없습니다. 관리자에게 문의하세요.")
+
+    st.markdown("---")
+    uploaded = st.file_uploader("작성한 엑셀 파일 업로드", type=["xlsx"],
+                                key="excel_upload")
+    if uploaded is not None:
+        parsed, err = parse_excel_upload(uploaded.read())
+        if err:
+            st.error("파일 파싱 오류: " + err)
+        elif parsed:
+            if parsed["year"]:
+                st.session_state["excel_year"]    = parsed["year"]
+            if parsed["quarter"]:
+                st.session_state["excel_quarter"] = parsed["quarter"]
+            if parsed["beds"] is not None:
+                st.session_state["excel_beds"]    = parsed["beds"]
+            for i, v in enumerate(parsed["patients"]):
+                st.session_state["excel_pat_" + str(i)] = v
+            if parsed["daytime"]:
+                st.session_state.daytime_nurses = parsed["daytime"]
+            if parsed["night"]:
+                st.session_state.night_nurses = parsed["night"]
+            msg = (
+                "데이터 로드 완료! "
+                "주간 간호사 " + str(len(parsed["daytime"])) + "명 / "
+                "야간전담 " + str(len(parsed["night"])) + "명 입력됨."
+            )
+            st.success(msg)
+            st.rerun()
+
+# ──────────────────────────────────────────────
 # ① 기본 정보
 # ──────────────────────────────────────────────
 st.markdown('<div class="section-title">① 기본 정보</div>', unsafe_allow_html=True)
 col1, col2, col3 = st.columns(3)
 with col1:
-    year = st.number_input("연도", min_value=2020, max_value=2040, value=2026, step=1)
+    _year_default = st.session_state.get("excel_year", 2026)
+    year = st.number_input("연도", min_value=2020, max_value=2040, value=_year_default, step=1)
 with col2:
-    quarter_label = st.selectbox("분기", list(QUARTER_RANGES.keys()), index=1)
+    _q_keys = list(QUARTER_RANGES.keys())
+    _q_default = st.session_state.get("excel_quarter", None)
+    _q_idx = _q_keys.index(_q_default) if _q_default in _q_keys else 1
+    quarter_label = st.selectbox("분기", _q_keys, index=_q_idx)
 with col3:
-    beds = st.number_input("운영 병상 수", min_value=0, max_value=500, value=0, step=1,
+    _beds_default = st.session_state.get("excel_beds", 0)
+    beds = st.number_input("운영 병상 수", min_value=0, max_value=500, value=_beds_default, step=1,
                            placeholder="병상 수 입력")
 
 q_start, q_end, q_days = get_quarter_dates(year, quarter_label)
@@ -235,8 +417,9 @@ for i in range(3):
     lbl = month_label(q_start, i)
     with month_cols[i]:
         st.markdown(f"**{lbl}**")
+        _pat_default = st.session_state.get(f"excel_pat_{i}", 0)
         pat = st.number_input("재원환자수", min_value=0, max_value=5000,
-                              value=0, step=1, key=f"pat_{i}",
+                              value=_pat_default, step=1, key=f"pat_{i}",
                               label_visibility="collapsed",
                               placeholder="환자수 입력")
         st.caption("월 재원환자수")
