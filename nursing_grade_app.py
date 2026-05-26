@@ -192,16 +192,20 @@ import io
 def parse_excel_upload(file_bytes):
     """업로드된 엑셀 파일에서 데이터를 파싱하여 dict로 반환"""
     import openpyxl
-    from datetime import date as date_type, datetime
+    from datetime import date as date_type, datetime as datetime_type
 
-    # 날짜 파싱 공용 함수 - datetime/date/문자열 모두 처리 후 반드시 date 객체 반환
     def parse_date(v):
+        """어떤 형태든 반드시 date 객체로 반환 (datetime 우선 체크)"""
         if v is None:
             return None
-        # Excel이 datetime으로 읽은 경우 → date로 변환
-        if isinstance(v, datetime):
+        # datetime이 date의 서브클래스이므로 반드시 datetime 먼저 체크
+        if type(v) is datetime_type or (hasattr(v, 'hour') and isinstance(v, datetime_type)):
             return v.date()
-        # 이미 date 객체
+        if type(v) is date_type:
+            return v
+        # 혹시 모를 datetime 서브클래스 처리
+        if isinstance(v, datetime_type):
+            return v.date()
         if isinstance(v, date_type):
             return v
         # 문자열 파싱
@@ -210,22 +214,26 @@ def parse_excel_upload(file_bytes):
             return None
         for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"]:
             try:
-                return datetime.strptime(s, fmt).date()
+                return datetime_type.strptime(s, fmt).date()
             except ValueError:
                 pass
         return None
 
     def to_int(v):
+        if v is None:
+            return None
         try:
-            return int(float(str(v))) if v is not None else None
+            return int(float(str(v)))
         except:
             return None
 
     def to_str(v):
-        return str(v).strip() if v is not None else None
+        if v is None:
+            return None
+        return str(v).strip()
 
     result = {
-        "year": None, "quarter": None, "beds": None,
+        "year": 2026, "quarter": None, "beds": 0,
         "patients": [0, 0, 0],
         "daytime": [], "night": []
     }
@@ -235,24 +243,28 @@ def parse_excel_upload(file_bytes):
         # ── 기본정보 시트 ──
         if "기본정보" in wb.sheetnames:
             ws = wb["기본정보"]
-            result["year"]    = to_int(ws["B5"].value) or 2026
-            result["quarter"] = to_str(ws["D5"].value)
-            result["beds"]    = to_int(ws["F5"].value) or 0
+            y = to_int(ws["B5"].value)
+            if y: result["year"] = y
+            q = to_str(ws["D5"].value)
+            if q: result["quarter"] = q
+            b = to_int(ws["F5"].value)
+            if b is not None: result["beds"] = b
             # 재원환자수: 10행 B~D열
             for i, col in enumerate(["B", "C", "D"]):
-                result["patients"][i] = to_int(ws[f"{col}10"].value) or 0
+                v = to_int(ws[f"{col}10"].value)
+                if v is not None:
+                    result["patients"][i] = v
 
         # ── 주간간호사 시트 ──
         if "주간간호사" in wb.sheetnames:
             ws2 = wb["주간간호사"]
             empty_streak = 0
-            for r in range(4, 54):
+            for r in range(4, 104):
                 hire_raw   = ws2.cell(r, 3).value
                 resign_raw = ws2.cell(r, 4).value
                 status_raw = ws2.cell(r, 5).value
 
-                # 입사일이 없으면 해당 행 스킵 (연속 3행 비면 종료)
-                if not hire_raw:
+                if hire_raw is None:
                     empty_streak += 1
                     if empty_streak >= 3:
                         break
@@ -276,13 +288,13 @@ def parse_excel_upload(file_bytes):
         if "야간전담간호사" in wb.sheetnames:
             ws3 = wb["야간전담간호사"]
             empty_streak = 0
-            for r in range(4, 54):
+            for r in range(4, 104):
                 hire_raw   = ws3.cell(r, 3).value
                 resign_raw = ws3.cell(r, 4).value
                 status_raw = ws3.cell(r, 5).value
                 hours_raw  = ws3.cell(r, 6).value
 
-                if not hire_raw:
+                if hire_raw is None:
                     empty_streak += 1
                     if empty_streak >= 3:
                         break
