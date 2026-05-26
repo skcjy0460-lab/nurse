@@ -139,15 +139,25 @@ def get_quarter_dates(year, quarter_label):
         end   = date(year, q["month_end"],   q["day_end"])
     return start, end, (end - start).days + 1
 
-def calc_nurse_days(hire_date, status, q_start, q_end):
+def calc_nurse_days(hire_date, status, q_start, q_end, resign_date=None):
+    # 실제 근무 종료일 결정
     if status == "퇴사":
+        if resign_date is None:
+            return 0
+        effective_end = min(resign_date, q_end)
+    else:
+        effective_end = q_end
+
+    # 입사일이 분기 종료 이후면 근무 없음
+    if hire_date > q_end:
         return 0
-    total = (q_end - q_start).days + 1
-    if hire_date <= q_start:
-        return total
-    elif hire_date <= q_end:
-        return (q_end - hire_date).days + 1
-    return 0
+    # 퇴사일이 분기 시작 이전이면 근무 없음
+    if status == "퇴사" and resign_date is not None and resign_date < q_start:
+        return 0
+
+    effective_start = max(hire_date, q_start)
+    days = (effective_end - effective_start).days + 1
+    return max(0, days)
 
 def calc_parttime_weight(weekly_hours):
     if weekly_hours >= 40: return 1.0
@@ -178,12 +188,12 @@ def month_label(base, offset):
 # ──────────────────────────────────────────────
 if "daytime_nurses" not in st.session_state:
     st.session_state.daytime_nurses = [
-        {"hire_date": None, "status": "근무"},
+        {"hire_date": None, "resign_date": None, "status": "근무"},
     ]
 
 if "night_nurses" not in st.session_state:
     st.session_state.night_nurses = [
-        {"hire_date": None, "status": "근무", "weekly_hours": 40},
+        {"hire_date": None, "resign_date": None, "status": "근무", "weekly_hours": 40},
     ]
 
 # ──────────────────────────────────────────────
@@ -249,45 +259,56 @@ st.markdown('<div class="section-title">③ 주간(일반) 간호사 인력</div
 c1, c2, _ = st.columns([1, 1, 6])
 with c1:
     if st.button("➕ 주간 간호사 추가"):
-        st.session_state.daytime_nurses.append({"hire_date": None, "status": "근무"})
+        st.session_state.daytime_nurses.append({"hire_date": None, "resign_date": None, "status": "근무"})
 with c2:
     if st.button("➖ 마지막 행 삭제") and len(st.session_state.daytime_nurses) > 1:
         st.session_state.daytime_nurses.pop()
 
-hc = st.columns([0.4, 2, 2, 2, 2])
-hc[0].markdown("**#**"); hc[1].markdown("**입사일**"); hc[2].markdown("**상태**")
-hc[3].markdown("**산정일수** 🟡"); hc[4].markdown("**환산인원** 🟡")
+hc = st.columns([0.4, 1.6, 1.6, 1.6, 1.6, 1.6])
+hc[0].markdown("**#**"); hc[1].markdown("**입사일**"); hc[2].markdown("**퇴사일**"); hc[3].markdown("**상태**")
+hc[4].markdown("**산정일수** 🟡"); hc[5].markdown("**환산인원** 🟡")
 
 daytime_total = 0.0
 for i, nurse in enumerate(st.session_state.daytime_nurses):
-    cols = st.columns([0.4, 2, 2, 2, 2])
+    cols = st.columns([0.4, 1.6, 1.6, 1.6, 1.6, 1.6])
     cols[0].markdown(f"{i+1}")
 
-    # 입사일: None이면 빈칸(value=None)
     hire_val = nurse["hire_date"]
     hire = cols[1].date_input(
         "입사일", value=hire_val, key=f"d_hire_{i}",
         label_visibility="collapsed"
     )
 
-    status = cols[2].selectbox(
+    resign_val = nurse.get("resign_date", None)
+    status_val = nurse["status"]
+    # 퇴사 상태일 때만 퇴사일 입력 활성화
+    resign = cols[2].date_input(
+        "퇴사일", value=resign_val, key=f"d_resign_{i}",
+        label_visibility="collapsed",
+        disabled=(status_val != "퇴사")
+    )
+
+    status = cols[3].selectbox(
         "상태", ["근무", "퇴사"],
-        index=0 if nurse["status"] == "근무" else 1,
+        index=0 if status_val == "근무" else 1,
         key=f"d_status_{i}", label_visibility="collapsed"
     )
 
+    # 상태가 바뀌어 근무로 변경되면 퇴사일 초기화
+    resign_date_final = resign if status == "퇴사" else None
+
     if hire is not None:
-        days_worked = calc_nurse_days(hire, status, q_start, q_end)
-        weight = days_worked / q_days if (status != "퇴사" and q_days > 0) else 0.0
-        cols[3].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{days_worked}일</div>', unsafe_allow_html=True)
-        cols[4].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
+        days_worked = calc_nurse_days(hire, status, q_start, q_end, resign_date=resign_date_final)
+        weight = days_worked / q_days if q_days > 0 else 0.0
+        cols[4].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{days_worked}일</div>', unsafe_allow_html=True)
+        cols[5].markdown(f'<div style="padding-top:8px;color:#1565c0;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
     else:
         weight = 0.0
-        cols[3].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
         cols[4].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
+        cols[5].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
 
     daytime_total += weight
-    st.session_state.daytime_nurses[i] = {"hire_date": hire, "status": status}
+    st.session_state.daytime_nurses[i] = {"hire_date": hire, "resign_date": resign_date_final, "status": status}
 
 st.markdown(
     f'<div class="result-card">📊 <b>주간 간호사 3개월 평균 (환산합계)</b>: '
@@ -308,18 +329,18 @@ st.markdown(
 c3, c4, _ = st.columns([1, 1, 6])
 with c3:
     if st.button("➕ 야간 간호사 추가"):
-        st.session_state.night_nurses.append({"hire_date": None, "status": "근무", "weekly_hours": 40})
+        st.session_state.night_nurses.append({"hire_date": None, "resign_date": None, "status": "근무", "weekly_hours": 40})
 with c4:
     if st.button("➖ 마지막 행 삭제 ", key="del_night") and len(st.session_state.night_nurses) > 1:
         st.session_state.night_nurses.pop()
 
-nh = st.columns([0.4, 2, 2, 2, 2, 2])
-nh[0].markdown("**#**"); nh[1].markdown("**입사일**"); nh[2].markdown("**상태**")
-nh[3].markdown("**근무시간**"); nh[4].markdown("**산정일수** 🟡"); nh[5].markdown("**환산인원** 🟡")
+nh = st.columns([0.4, 1.5, 1.5, 1.5, 1.5, 1.8, 1.5])
+nh[0].markdown("**#**"); nh[1].markdown("**입사일**"); nh[2].markdown("**퇴사일**"); nh[3].markdown("**상태**")
+nh[4].markdown("**근무시간**"); nh[5].markdown("**산정일수** 🟡"); nh[6].markdown("**환산인원** 🟡")
 
 night_total = 0.0
 for i, nurse in enumerate(st.session_state.night_nurses):
-    cols = st.columns([0.4, 2, 2, 2, 2, 2])
+    cols = st.columns([0.4, 1.5, 1.5, 1.5, 1.5, 1.8, 1.5])
     cols[0].markdown(f"{i+1}")
 
     hire_val = nurse["hire_date"]
@@ -328,23 +349,33 @@ for i, nurse in enumerate(st.session_state.night_nurses):
         label_visibility="collapsed"
     )
 
+    resign_val = nurse.get("resign_date", None)
+    status_val = nurse["status"]
+    resign = cols[2].date_input(
+        "퇴사일", value=resign_val, key=f"n_resign_{i}",
+        label_visibility="collapsed",
+        disabled=(status_val != "퇴사")
+    )
+
     status_opts = ["근무", "단시간근무", "퇴사"]
-    sidx = status_opts.index(nurse["status"]) if nurse["status"] in status_opts else 0
-    status = cols[2].selectbox("상태", status_opts, index=sidx,
+    sidx = status_opts.index(status_val) if status_val in status_opts else 0
+    status = cols[3].selectbox("상태", status_opts, index=sidx,
                                key=f"n_status_{i}", label_visibility="collapsed")
 
-    weekly_h = cols[3].number_input(
+    weekly_h = cols[4].number_input(
         "근무시간(h)", min_value=0, max_value=60,
         value=int(nurse.get("weekly_hours", 40)), step=1,
         key=f"n_hours_{i}", label_visibility="collapsed",
         disabled=(status != "단시간근무")
     )
 
+    resign_date_final = resign if status == "퇴사" else None
+
     if hire is not None:
-        days_worked = calc_nurse_days(hire, status, q_start, q_end)
+        days_worked = calc_nurse_days(hire, status, q_start, q_end, resign_date=resign_date_final)
         if status == "퇴사":
-            weight = 0.0
-            eff_display = "0일"
+            weight = days_worked / q_days if q_days > 0 else 0.0
+            eff_display = f"{days_worked}일" if days_worked > 0 else "0일"
         elif status == "단시간근무":
             pw = calc_parttime_weight(weekly_h)
             weight = (days_worked / q_days) * pw if q_days > 0 else 0.0
@@ -353,15 +384,15 @@ for i, nurse in enumerate(st.session_state.night_nurses):
         else:
             weight = days_worked / q_days if q_days > 0 else 0.0
             eff_display = f"{days_worked}일"
-        cols[4].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600;font-size:12px">{eff_display}</div>', unsafe_allow_html=True)
-        cols[5].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
+        cols[5].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600;font-size:12px">{eff_display}</div>', unsafe_allow_html=True)
+        cols[6].markdown(f'<div style="padding-top:8px;color:#6a1b9a;font-weight:600">{weight:.2f}명</div>', unsafe_allow_html=True)
     else:
         weight = 0.0
-        cols[4].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
         cols[5].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
+        cols[6].markdown('<div style="padding-top:8px;color:#bbb">-</div>', unsafe_allow_html=True)
 
     night_total += weight
-    st.session_state.night_nurses[i] = {"hire_date": hire, "status": status, "weekly_hours": weekly_h}
+    st.session_state.night_nurses[i] = {"hire_date": hire, "resign_date": resign_date_final, "status": status, "weekly_hours": weekly_h}
 
 st.markdown(
     f'<div class="result-card">📊 <b>야간전담 간호사 3개월 평균 (환산합계)</b>: '
